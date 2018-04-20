@@ -11,7 +11,8 @@ include(defaults/HunterCacheServers)
 
 cable_configure_toolchain(DEFAULT cxx11)
 
-set(HUNTER_CONFIGURATION_TYPES Release)
+set(HUNTER_CONFIGURATION_TYPES Release CACHE STRING "Build type of Hunter packages")
+set(HUNTER_JOBS_NUMBER 6 CACHE STRING "Number of parallel builds used by Hunter")
 HunterGate(
     URL "https://github.com/ruslo/hunter/archive/v0.20.34.tar.gz"
     SHA1 "2f04d1beffdf39db1c40d8347beb8c10bbe9b8ed"
@@ -19,7 +20,7 @@ HunterGate(
 )
 
 project(ethminer)
-set(PROJECT_VERSION 0.15.0.dev0)
+set(PROJECT_VERSION 0.15.0.dev3)
 
 cable_set_build_type(DEFAULT Release CONFIGURATION_TYPES Release RelWithDebInfo Debug)
 
@@ -83,6 +84,8 @@ message("")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(EthCompilerSettings)
+
+include(ProjectEthash)
 
 cable_add_buildinfo_library(PREFIX ethminer)
 

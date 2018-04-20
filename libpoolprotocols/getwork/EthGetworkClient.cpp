@@ -1,4 +1,7 @@
 #include "EthGetworkClient.h"
+
+#include <ethash/ethash.hpp>
+
 #include <chrono>
 
 using namespace std;
@@ -24,6 +27,8 @@ void EthGetworkClient::connect()
 	if (m_connection_changed) {
 		stringstream ss;
 		ss <<  "http://" + m_conn.Host() << ':' << m_conn.Port();
+		if (m_conn.Path().length())
+			ss << m_conn.Path();
 		p_client = new ::JsonrpcGetwork(new jsonrpc::HttpClient(ss.str()));
 	}
 
@@ -95,9 +100,10 @@ void EthGetworkClient::workLoop()
 				Json::Value v = p_client->eth_getWork();
 				WorkPackage newWorkPackage;
 				newWorkPackage.header = h256(v[0].asString());
-				newWorkPackage.epoch = EthashAux::toEpoch(h256(v[1].asString()));
+                newWorkPackage.epoch = ethash::find_epoch_number(
+                    ethash::hash256::from_bytes(h256{v[1].asString()}.data()));
 
-				// Since we do not have a real connected state with getwork, we just fake it.
+                // Since we do not have a real connected state with getwork, we just fake it.
 				// If getting work succeeds we know that the connection works
 				if (m_justConnected && m_onConnected) {
 					m_justConnected = false;
