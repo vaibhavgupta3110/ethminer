@@ -20,7 +20,7 @@ HunterGate(
 )
 
 project(ethminer)
-set(PROJECT_VERSION 0.15.0.dev3)
+set(PROJECT_VERSION 0.15.0.dev4)
 
 cable_set_build_type(DEFAULT Release CONFIGURATION_TYPES Release RelWithDebInfo Debug)
 
@@ -90,7 +90,6 @@ include(ProjectEthash)
 cable_add_buildinfo_library(PREFIX ethminer)
 
 add_subdirectory(libdevcore)
-add_subdirectory(libethash)
 add_subdirectory(libethcore)
 add_subdirectory(libhwmon)
 add_subdirectory(libpoolprotocols)
