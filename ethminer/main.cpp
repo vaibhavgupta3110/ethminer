@@ -14,11 +14,6 @@
 	You should have received a copy of the GNU General Public License
 	along with cpp-ethereum.  If not, see <http://www.gnu.org/licenses/>.
 */
-/** @file main.cpp
- * @author Gav Wood <i@gavwood.com>
- * @date 2014
- * Ethereum client.
- */
 
 #include <thread>
 #include <fstream>
@@ -44,11 +39,12 @@ void help()
 	MinerCLI::streamHelp(cout);
 	cout
 		<< " General Options:" << endl
-		<< "    -v,--verbosity <0 - 9>  Set the log verbosity from 0 to 9 (default: 5). Set to 9 for switch time logging." << endl
+		<< "    -v,--verbosity <0 - 9>  Set the log verbosity from 0 to 9 (default: 5). Set to 6 or greater for switch time logging." << endl
 		<< "    -V,--version  Show the version and exit." << endl
 		<< "    -h,--help  Show this help message and exit." << endl
 		<< " Environment variables:" << endl
 		<< "     NO_COLOR - set to any value to disable color output. Unset to re-enable color output." << endl
+		<< "     SYSLOG   - set to any value to strip time and disable color from output, for logging under systemd" << endl
 		;
 	exit(0);
 }
@@ -56,8 +52,8 @@ void help()
 void version()
 {
     auto* bi = ethminer_get_buildinfo();
-    cout << "ethminer version " << bi->project_version << "+git." << string(bi->git_commit_hash).substr(0, 7) << endl;
-    cout << "Build: " << bi->system_name << "/" << bi->build_type << "/" << bi->compiler_id << endl;
+    cout << "ethminer " << bi->project_version << "\nBuild: " << bi->system_name << "/"
+         << bi->build_type << "/" << bi->compiler_id << "\n";
     exit(0);
 }
 
@@ -68,6 +64,11 @@ int main(int argc, char** argv)
 	setenv("GPU_MAX_ALLOC_PERCENT", "100");
 	setenv("GPU_SINGLE_ALLOC_PERCENT", "100");
 
+	if (getenv("SYSLOG"))
+	{
+		g_syslog = true;
+		g_useColor = false;
+	}
 	if (getenv("NO_COLOR"))
 		g_useColor = false;
 #if defined(_WIN32)
@@ -103,7 +104,17 @@ int main(int argc, char** argv)
 			// Standard options:
 			string arg = argv[i];
 			if ((arg == "-v" || arg == "--verbosity") && i + 1 < argc)
-				g_logVerbosity = atoi(argv[++i]);
+			{
+				try
+				{
+					g_logVerbosity = stoul(argv[++i]);
+				}
+				catch (...)
+				{
+					cerr << "Invalid verbosity: " << argv[i] << endl;
+					exit(-1);
+				}
+			}
 			else if (arg == "-h" || arg == "--help")
 				help();
 			else if (arg == "-V" || arg == "--version")

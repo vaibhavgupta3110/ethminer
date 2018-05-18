@@ -21,6 +21,7 @@ unsigned CLMiner::s_workgroupSize = CLMiner::c_defaultLocalWorkSize;
 unsigned CLMiner::s_initialGlobalWorkSize = CLMiner::c_defaultGlobalWorkSizeMultiplier * CLMiner::c_defaultLocalWorkSize;
 unsigned CLMiner::s_threadsPerHash = 8;
 CLKernelName CLMiner::s_clKernelName = CLMiner::c_defaultKernelName;
+bool CLMiner::s_adjustWorkSize = false;
 
 constexpr size_t c_maxSearchResults = 1;
 
@@ -274,6 +275,13 @@ CLMiner::~CLMiner()
     kick_miner();
 }
 
+
+typedef struct {
+    unsigned count;
+    unsigned gid;
+    unsigned mix[8];
+} search_results;
+
 void CLMiner::workLoop()
 {
     // Memory for zero-ing buffers. Cannot be static because crashes on macOS.
@@ -341,15 +349,12 @@ void CLMiner::workLoop()
             }
 
             // Read results.
-            // TODO: could use pinned host pointer instead.
-            uint32_t results[c_maxSearchResults + 1];
+			search_results results;
+
             m_queue.enqueueReadBuffer(m_searchBuffer, CL_TRUE, 0, sizeof(results), &results);
 
-            uint64_t nonce = 0;
-            if (results[0] > 0)
+            if (results.count)
             {
-                // Ignore results except the first one.
-                nonce = current.startNonce + results[1];
                 // Reset search buffer if any solution found.
                 m_queue.enqueueWriteBuffer(m_searchBuffer, CL_FALSE, 0, sizeof(c_zero), &c_zero);
             }
@@ -359,14 +364,21 @@ void CLMiner::workLoop()
             m_queue.enqueueNDRangeKernel(m_searchKernel, cl::NullRange, m_globalWorkSize, m_workgroupSize);
 
             // Report results while the kernel is running.
-            // It takes some time because ethash must be re-evaluated on CPU.
-            if (nonce != 0) {
-                Result r = EthashAux::eval(current.epoch, current.header, nonce);
-                if (r.value < current.boundary)
-                    farm.submitProof(Solution{nonce, r.mixHash, current, current.header != w.header});
+            if (results.count) {
+                uint64_t nonce = current.startNonce + results.gid;
+                if (!s_noeval) {
+                    Result r = EthashAux::eval(current.epoch, current.header, nonce);
+                    if (r.value <= current.boundary)
+                        farm.submitProof(Solution{nonce, r.mixHash, current, current.header != w.header});
+                    else {
+                        farm.failedSolution();
+                        cwarn << "GPU gave incorrect result!";
+                    }
+                }
                 else {
-                    farm.failedSolution();
-                    cwarn << "FAILURE: GPU gave incorrect result!";
+                    h256 mix;
+                    memcpy(mix.data(), results.mix, sizeof(results.mix));
+                    farm.submitProof(Solution{nonce, mix, current, current.header != w.header});
                 }
             }
 
@@ -449,9 +461,11 @@ void CLMiner::listDevices()
     std::cout << outString;
 }
 
-bool CLMiner::configureGPU(unsigned _localWorkSize, unsigned _globalWorkSizeMultiplier,
-    unsigned _platformId, int epoch, unsigned _dagLoadMode, unsigned _dagCreateDevice, bool _exit)
+bool CLMiner::configureGPU(unsigned _localWorkSize, int _globalWorkSizeMultiplier,
+    unsigned _platformId, int epoch, unsigned _dagLoadMode, unsigned _dagCreateDevice,
+	bool _noeval, bool _exit)
 {
+	s_noeval = _noeval;
     s_dagLoadMode = _dagLoadMode;
     s_dagCreateDevice = _dagCreateDevice;
     s_exit = _exit;
@@ -460,6 +474,10 @@ bool CLMiner::configureGPU(unsigned _localWorkSize, unsigned _globalWorkSizeMult
 
     _localWorkSize = ((_localWorkSize + 7) / 8) * 8;
     s_workgroupSize = _localWorkSize;
+	if (_globalWorkSizeMultiplier < 0) {
+		s_adjustWorkSize = true;
+		_globalWorkSizeMultiplier = -_globalWorkSizeMultiplier;
+	}
     s_initialGlobalWorkSize = _globalWorkSizeMultiplier * _localWorkSize;
 
     auto dagSize = ethash::get_full_dataset_size(ethash::calculate_full_dataset_num_items(epoch));
@@ -471,6 +489,7 @@ bool CLMiner::configureGPU(unsigned _localWorkSize, unsigned _globalWorkSizeMult
         return false;
 
     vector<cl::Device> devices = getDevices(platforms, _platformId);
+    bool foundSuitableDevice = false;
     for (auto const& device: devices)
     {
         cl_ulong result = 0;
@@ -480,15 +499,20 @@ bool CLMiner::configureGPU(unsigned _localWorkSize, unsigned _globalWorkSizeMult
             cnote <<
                 "Found suitable OpenCL device [" << device.getInfo<CL_DEVICE_NAME>()
                                                  << "] with " << result << " bytes of GPU memory";
-            return true;
-        }
-
+            foundSuitableDevice = true;
+        } 
+        else 
+        {
         cnote <<
             "OpenCL device " << device.getInfo<CL_DEVICE_NAME>()
                              << " has insufficient GPU memory." << result <<
                              " bytes of memory found < " << dagSize << " bytes of memory required";
+        }
     }
-
+    if (foundSuitableDevice) 
+    {
+        return true;
+    }
     cout << "No GPU device with sufficient memory was found. Can't GPU mine. Remove the -G argument" << endl;
     return false;
 }
@@ -581,11 +605,23 @@ bool CLMiner::init(int epoch)
         m_context = cl::Context(vector<cl::Device>(&device, &device + 1));
         m_queue = cl::CommandQueue(m_context, device);
 
-        // make sure that global work size is evenly divisible by the local workgroup size
         m_workgroupSize = s_workgroupSize;
         m_globalWorkSize = s_initialGlobalWorkSize;
-        if (m_globalWorkSize % m_workgroupSize != 0)
-            m_globalWorkSize = ((m_globalWorkSize / m_workgroupSize) + 1) * m_workgroupSize;
+
+        if (s_adjustWorkSize) {
+            unsigned int computeUnits;
+	    	clGetDeviceInfo(device(), CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(computeUnits), &computeUnits, NULL);
+            // Apparently some 36 CU devices return a bogus 14!!!
+            computeUnits = computeUnits == 14 ? 36 : computeUnits;
+		    if ((platformId == OPENCL_PLATFORM_AMD) && (computeUnits != 36)) {
+		    	m_globalWorkSize = (m_globalWorkSize * computeUnits) / 36;
+		    	// make sure that global work size is evenly divisible by the local workgroup size
+		    	if (m_globalWorkSize % m_workgroupSize != 0)
+		    		m_globalWorkSize = ((m_globalWorkSize / m_workgroupSize) + 1) * m_workgroupSize;
+		    	cnote << "Adjusting CL work multiplier for " << computeUnits << " CUs."
+		    		<< "Adjusted work multiplier: " << m_globalWorkSize / m_workgroupSize;
+		    }
+        }
 
         const auto& context = ethash::managed::get_epoch_context(epoch);
         const auto lightNumItems = context.light_cache_num_items;
@@ -677,7 +713,7 @@ bool CLMiner::init(int epoch)
 
         // create mining buffers
         ETHCL_LOG("Creating mining buffer");
-        m_searchBuffer = cl::Buffer(m_context, CL_MEM_WRITE_ONLY, (c_maxSearchResults + 1) * sizeof(uint32_t));
+        m_searchBuffer = cl::Buffer(m_context, CL_MEM_WRITE_ONLY, sizeof(search_results));
 
         const auto workItems = dagNumItems * 2;  // GPU computes partial 512-bit DAG items.
         uint32_t fullRuns = workItems / m_globalWorkSize;

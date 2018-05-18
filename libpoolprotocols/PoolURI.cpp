@@ -47,7 +47,7 @@ bool URI::KnownScheme()
 	return s_schemes.find(s) != s_schemes.end();
 }
 
-ProtocolFamily URI::ProtoFamily() const
+ProtocolFamily URI::Family() const
 {
 	if (!m_uri.scheme())
 		return ProtocolFamily::STRATUM;
@@ -57,7 +57,7 @@ ProtocolFamily URI::ProtoFamily() const
 	return s_schemes[s].family;
 }
 
-unsigned URI::ProtoVersion() const
+unsigned URI::Version() const
 {
 	if (!m_uri.scheme())
 		return 0;
@@ -67,7 +67,7 @@ unsigned URI::ProtoVersion() const
 	return s_schemes[s].version;
 }
 
-SecureLevel URI::ProtoSecureLevel() const
+SecureLevel URI::SecLevel() const
 {
 	if (!m_uri.scheme())
 		return SecureLevel::NONE;
@@ -124,7 +124,13 @@ unsigned short URI::Port() const
 	std::string s(*m_uri.port());
 	s = network::detail::decode(s);
 	boost::trim(s);
-	return (unsigned short)atoi(s.c_str());
+	try {
+		return (unsigned short)std::stoul(s.c_str());
+	}
+	catch (...)
+	{
+		return 0;
+	}
 }
 
 std::string URI::User() const
@@ -140,7 +146,7 @@ std::string URI::User() const
 	return s.substr(0, f);
 }
 
-std::string URI::Pswd() const
+std::string URI::Pass() const
 {
 	if (!m_uri.user_info())
 		return "";

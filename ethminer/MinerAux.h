@@ -34,7 +34,6 @@
 #include <boost/optional.hpp>
 
 #include <libethcore/Exceptions.h>
-#include <libdevcore/SHA3.h>
 #include <libethcore/EthashAux.h>
 #include <libethcore/Farm.h>
 #include <ethminer-buildinfo.h>
@@ -54,6 +53,7 @@
 #endif
 #if API_CORE
 #include <libapicore/Api.h>
+#include <libapicore/httpServer.h>
 #endif
 
 using namespace std;
@@ -92,91 +92,16 @@ public:
 		Stratum
 	};
 
-	MinerCLI() {m_endpoints.resize(k_max_endpoints);}
-
 	static void signalHandler(int sig)
 	{
 		(void)sig;
 		g_running = false;
 	}
 
-	void deprecated(const string& arg)
-	{
-		cerr << "Warning: " << arg << " is deprecated. Use the -P parameter instead." << endl;
-		m_legacyParameters = true;
-	}
-
 	bool interpretOption(int& i, int argc, char** argv)
 	{
 		string arg = argv[i];
-		if ((arg == "-F" || arg == "--farm") && i + 1 < argc)
-		{
-			deprecated(arg);
-			m_mode = OperationMode::Farm;
-			string url = argv[++i];
-			URI uri;
-			try {
-				uri = url;
-			}
-			catch (...)
-			{
-				cerr << "Bad endpoint address: " << url << endl;
-				BOOST_THROW_EXCEPTION(BadArgument());
-			}
-
-			if (uri.Host().length())
-			{
-				m_endpoints[k_primary_ep_ix].Host(uri.Host());
-				m_endpoints[k_primary_ep_ix].Path(uri.Path());
-				if (uri.Port())
-					m_endpoints[k_primary_ep_ix].Port(uri.Port());
-				else
-					m_endpoints[k_primary_ep_ix].Port(80);
-			}
-			else
-			{
-				cerr << "Bad endpoint address: " << url << endl;
-				BOOST_THROW_EXCEPTION(BadArgument());
-			}
-		}
-		else if ((arg == "-FF" || arg == "-SF" || arg == "-FS" || arg == "--farm-failover" || arg == "--stratum-failover") && i + 1 < argc)
-		{
-			deprecated(arg);
-			string url = argv[++i];
-			if (url == "exit") // add fake port # to exit url
-				url = "exit:1";
-			URI uri;
-			try {
-				uri = url;
-			}
-			catch (...)
-			{
-				cerr << "Bad endpoint address: " << url << endl;
-				BOOST_THROW_EXCEPTION(BadArgument());
-			}
-
-			if (uri.Host().length())
-			{
-				m_endpoints[k_secondary_ep_ix].Host(uri.Host());
-				m_endpoints[k_secondary_ep_ix].Path(uri.Path());
-				if (m_mode == OperationMode::Stratum)
-				{
-					if (uri.Port())
-						m_endpoints[k_secondary_ep_ix].Port(uri.Port());
-					else
-					{
-						cerr << "Bad endpoint address: " << url << endl;
-						BOOST_THROW_EXCEPTION(BadArgument());
-					}
-				}
-			}
-			else
-			{
-				cerr << "Bad endpoint address: " << url << endl;
-				BOOST_THROW_EXCEPTION(BadArgument());
-			}
-		}
-		else if (arg == "--farm-recheck" && i + 1 < argc)
+		if (arg == "--farm-recheck" && i + 1 < argc)
 			try {
 				m_farmRecheckSet = true;
 				m_farmRecheckPeriod = stol(argv[++i]);
@@ -195,74 +120,6 @@ public:
 				cerr << "Bad " << arg << " option: " << argv[i] << endl;
 				BOOST_THROW_EXCEPTION(BadArgument());
 			}
-		else if ((arg == "-S" || arg == "--stratum") && i + 1 < argc)
-		{
-			deprecated(arg);
-			m_mode = OperationMode::Stratum;
-
-			string url = string(argv[++i]);
-			URI uri;
-			try {
-				uri = url;
-			}
-			catch (...)
-			{
-				cerr << "Bad endpoint address: " << url << endl;
-				BOOST_THROW_EXCEPTION(BadArgument());
-			}
-
-			if (uri.Host().length() && uri.Port())
-			{
-				m_endpoints[k_primary_ep_ix].Host(uri.Host());
-				m_endpoints[k_primary_ep_ix].Port(uri.Port());
-			}
-			else
-			{
-				cerr << "Bad endpoint address: " << url << endl;
-				BOOST_THROW_EXCEPTION(BadArgument());
-			}
-		}
-		else if ((arg == "-O" || arg == "--userpass") && i + 1 < argc)
-		{
-			deprecated(arg);
-			string userpass = string(argv[++i]);
-			size_t p = userpass.find_first_of(":");
-			m_endpoints[k_primary_ep_ix].User(userpass.substr(0, p));
-			if (p + 1 <= userpass.length())
-				m_endpoints[k_primary_ep_ix].Pass(userpass.substr(p+1));
-		}
-		else if ((arg == "-SC" || arg == "--stratum-client") && i + 1 < argc)
-		{
-			cerr << "The argument " << arg << " has been removed. There is only one stratum client now." << endl;
-		}
-		else if ((arg == "-SP" || arg == "--stratum-protocol") && i + 1 < argc)
-		{
-			deprecated(arg);
-			try {
-				m_endpoints[k_primary_ep_ix].Version((EthStratumClient::StratumProtocol)atoi(argv[++i]));
-				m_endpoints[k_secondary_ep_ix].Version(m_endpoints[k_primary_ep_ix].Version());
-			}
-			catch (...)
-			{
-				cerr << "Bad " << arg << " option: " << argv[i] << endl;
-				BOOST_THROW_EXCEPTION(BadArgument());
-			}
-		}
-		else if (arg == "--stratum-ssl")
-		{
-			deprecated(arg);
-			SecureLevel secLevel = SecureLevel::TLS12;
-			if ((i + 1 < argc) && (*argv[i + 1] != '-')) {
-				int secMode = atoi(argv[++i]);
-				if (secMode == 1)
-					secLevel = SecureLevel::TLS;
-				if (secMode == 2)
-					secLevel = SecureLevel::ALLOW_SELFSIGNED;
-			}
-			m_endpoints[k_primary_ep_ix].SecLevel(secLevel);
-			m_endpoints[k_secondary_ep_ix].SecLevel(secLevel);
-				
-		}
 		else if ((arg == "-SE" || arg == "--stratum-email") && i + 1 < argc)
 		{
 			try {
@@ -274,48 +131,34 @@ public:
 				BOOST_THROW_EXCEPTION(BadArgument());
 			}
 		}
-		else if ((arg == "-FO" || arg == "--failover-userpass") && i + 1 < argc)
-		{
-			deprecated(arg);
-			string userpass = string(argv[++i]);
-			size_t p = userpass.find_first_of(":");
-			m_endpoints[k_secondary_ep_ix].User(userpass.substr(0, p));
-			if (p + 1 <= userpass.length())
-				m_endpoints[k_secondary_ep_ix].Pass(userpass.substr(p + 1));
-		}
-		else if ((arg == "-u" || arg == "--user") && i + 1 < argc)
-		{
-			deprecated(arg);
-			m_endpoints[k_primary_ep_ix].User(string(argv[++i]));
-		}
-		else if ((arg == "-p" || arg == "--pass") && i + 1 < argc)
-		{
-			deprecated(arg);
-			m_endpoints[k_primary_ep_ix].Pass(string(argv[++i]));
-		}
-		else if ((arg == "-o" || arg == "--port") && i + 1 < argc)
-		{
-			deprecated(arg);
-			m_endpoints[k_primary_ep_ix].Port(atoi(argv[++i]));
-		}
-		else if ((arg == "-fu" || arg == "--failover-user") && i + 1 < argc)
-		{
-			deprecated(arg);
-			m_endpoints[k_secondary_ep_ix].User(string(argv[++i]));
-		}
-		else if ((arg == "-fp" || arg == "--failover-pass") && i + 1 < argc)
-		{
-			deprecated(arg);
-			m_endpoints[k_secondary_ep_ix].Pass(string(argv[++i]));
-		}
-		else if ((arg == "-fo" || arg == "--failover-port") && i + 1 < argc)
-		{
-			deprecated(arg);
-			m_endpoints[k_secondary_ep_ix].Port(atoi(argv[++i]));
-		}
 		else if ((arg == "--work-timeout") && i + 1 < argc)
 		{
-			m_worktimeout = atoi(argv[++i]);
+			try
+			{
+				m_worktimeout = stoi(argv[++i]);
+			}
+			catch (...)
+			{
+				cerr << "Bad " << arg << " option: " << argv[i] << endl;
+				BOOST_THROW_EXCEPTION(BadArgument());
+			}
+			
+		}
+		else if ((arg == "--response-timeout") && i + 1 < argc)
+		{
+			try
+			{
+				m_responsetimeout = stoi(argv[++i]);
+				// Do not allow less than 2 seconds 
+				// or we may keep disconnecting and reconnecting
+				m_responsetimeout = (m_responsetimeout < 2 ? 2 : m_responsetimeout);
+			}
+			catch (...)
+			{
+				cerr << "Bad " << arg << " option: " << argv[i] << endl;
+				BOOST_THROW_EXCEPTION(BadArgument());
+			}
+
 		}
 		else if ((arg == "-RH" || arg == "--report-hashrate"))
 		{
@@ -336,7 +179,15 @@ public:
 		{
 			m_show_hwmonitors = true;
 			if ((i + 1 < argc) && (*argv[i + 1] != '-'))
-				m_show_power = atoi(argv[++i]) != 0;
+				try
+				{
+					m_show_power = stoul(argv[++i]) != 0;
+				}
+				catch (...)
+				{
+					cerr << "Bad " << arg << " option: " << argv[i] << endl;
+					BOOST_THROW_EXCEPTION(BadArgument());
+				}
 		}
 		else if ((arg == "--exit"))
 		{
@@ -344,7 +195,6 @@ public:
 		}
 		else if ((arg == "-P") && (i + 1 < argc))
 		{
-			m_newParameters = true;
 			string url = argv[++i];
 			if (url == "exit") // add fake scheme and port to 'exit' url
 				url = "stratum://exit:1";
@@ -361,15 +211,10 @@ public:
 				cerr << "Unknown URI scheme " << uri.Scheme() << endl;
 				BOOST_THROW_EXCEPTION(BadArgument());
 			}
-			if (m_ep_ix >= k_max_endpoints)
-			{
-				cerr << "Too many endpoints. Maximum is " << k_max_endpoints << endl;
-				BOOST_THROW_EXCEPTION(BadArgument());
-			}
-			m_endpoints[m_ep_ix] = PoolConnection(uri);
+			m_endpoints.push_back(uri);
 			
 			OperationMode mode = OperationMode::None;
-			switch (uri.ProtoFamily())
+			switch (uri.Family())
 			{
 			case ProtocolFamily::STRATUM:
 				mode = OperationMode::Stratum;
@@ -384,12 +229,32 @@ public:
 				BOOST_THROW_EXCEPTION(BadArgument());
 			}
 			m_mode = mode;
-			m_ep_ix++;
 		}
 #if API_CORE
 		else if ((arg == "--api-port") && i + 1 < argc)
 		{
-			m_api_port = atoi(argv[++i]);
+			try
+			{
+				// can be negative
+				m_api_port = stoi(argv[++i]);
+			}
+			catch (...)
+			{
+				cerr << "Bad " << arg << " option: " << argv[i] << endl;
+				BOOST_THROW_EXCEPTION(BadArgument());
+			}
+		}
+		else if ((arg == "--http-port") && i + 1 < argc)
+		{
+			try
+			{
+				m_http_port = stoul(argv[++i]);
+			}
+			catch (...)
+			{
+				cerr << "Bad " << arg << " option: " << argv[i] << endl;
+				BOOST_THROW_EXCEPTION(BadArgument());
+			}
 		}
 #endif
 #if ETH_ETHASHCL
@@ -445,7 +310,7 @@ public:
 		{
 			try
 			{
-				m_globalWorkSizeMultiplier = stol(argv[++i]);
+				m_globalWorkSizeMultiplier = stoi(argv[++i]);
 
 			}
 			catch (...)
@@ -506,21 +371,21 @@ public:
 				}
 			}
 		}
-                else if (arg == "--cuda-parallel-hash" && i + 1 < argc)
-                {
-                        try {
-                                m_parallelHash = stol(argv[++i]);
-                                if (m_parallelHash == 0 || m_parallelHash > 8)
-                                {
-                                    throw BadArgument();
-                                }
-                        }
-                        catch (...)
+        else if (arg == "--cuda-parallel-hash" && i + 1 < argc)
+        {
+                try {
+                        m_parallelHash = stol(argv[++i]);
+                        if (m_parallelHash == 0 || m_parallelHash > 8)
                         {
-                                cerr << "Bad " << arg << " option: " << argv[i] << endl;
-                                BOOST_THROW_EXCEPTION(BadArgument());
+                            BOOST_THROW_EXCEPTION(BadArgument());
                         }
                 }
+                catch (...)
+                {
+                        cerr << "Bad " << arg << " option: " << argv[i] << endl;
+                        BOOST_THROW_EXCEPTION(BadArgument());
+                }
+        }
 		else if (arg == "--cuda-schedule" && i + 1 < argc)
 		{
 			string mode = argv[++i];
@@ -537,8 +402,10 @@ public:
 		else if (arg == "--cuda-streams" && i + 1 < argc)
 			m_numStreams = stol(argv[++i]);
 		else if (arg == "--cuda-noeval")
-			m_cudaNoEval = true;
+			m_noEval = true;
 #endif
+		else if (arg == "--noeval")
+			m_noEval = true;
 		else if ((arg == "-L" || arg == "--dag-load-mode") && i + 1 < argc)
 		{
 			string mode = argv[++i];
@@ -547,7 +414,17 @@ public:
 			else if (mode == "single")
 			{
 				m_dagLoadMode = DAG_LOAD_MODE_SINGLE;
-				m_dagCreateDevice = stol(argv[++i]);
+
+				try {
+					m_dagCreateDevice = stol(argv[++i]);
+				}
+				catch (...)
+				{
+					cerr << "Bad " << arg << " option: " << argv[i] << endl;
+					i--;
+					BOOST_THROW_EXCEPTION(BadArgument());
+				}
+
 			}
 			else
 			{
@@ -650,11 +527,6 @@ public:
 		}
 		else
 			return false;
-		if (m_legacyParameters && m_newParameters)
-		{
-			cerr << "Deprecated parameters and the -P parameter are incompatible. Please migrate to using the -P parameter." << endl;
-			BOOST_THROW_EXCEPTION(BadArgument());
-		}
 		return true;
 	}
 
@@ -674,9 +546,8 @@ public:
 		}
 
 		auto* build = ethminer_get_buildinfo();
-		minelog << "ethminer version " << build->project_version;
-		minelog << "Build: " << build->system_name << "/" << build->build_type
-			 << "+git." << string(build->git_commit_hash).substr(0, 7);
+		minelog << "ethminer " << build->project_version;
+		minelog << "Build: " << build->system_name << "/" << build->build_type;
 
 		if (m_minerType == MinerType::CL || m_minerType == MinerType::Mixed)
 		{
@@ -697,6 +568,7 @@ public:
 					0,
 					m_dagLoadMode,
 					m_dagCreateDevice,
+					m_noEval,
 					m_exit
 				))
 				exit(1);
@@ -723,7 +595,7 @@ public:
 				m_cudaSchedule,
 				m_dagLoadMode,
 				m_dagCreateDevice,
-				m_cudaNoEval,
+				m_noEval,
 				m_exit
 				))
 				exit(1);
@@ -749,36 +621,25 @@ public:
 	{
 		_out
 			<< "Work farming mode:" << endl
-			<< "    -F,--farm <url>  (deprecated) Put into mining farm mode with the work server at URL (default: http://127.0.0.1:8545)" << endl
-			<< "    -FF,-FO, --farm-failover, --stratum-failover <url> (deprecated) Failover getwork/stratum URL (default: disabled)" << endl
 			<< "	--farm-retries <n> Number of retries until switch to failover (default: 3)" << endl
-			<< "	-S, --stratum <host:port>  (deprecated) Put into stratum mode with the stratum server at host:port" << endl
-			<< "	-SF, --stratum-failover <host:port>  (deprecated) Failover stratum server at host:port" << endl
-			<< "    -O, --userpass <username.workername:password> (deprecated) Stratum login credentials" << endl
-			<< "    -FO, --failover-userpass <username.workername:password> (deprecated) Failover stratum login credentials (optional, will use normal credentials when omitted)" << endl
 			<< "    --work-timeout <n> reconnect/failover after n seconds of working on the same (stratum) job. Defaults to 180. Don't set lower than max. avg. block time" << endl
-			<< "    --stratum-ssl [<n>]  (deprecated) Use encryption to connect to stratum server." << endl
-			<< "        0: Force TLS1.2 (default)" << endl
-			<< "        1: Allow any TLS version" << endl
-			<< "        2: Allow self-signed or invalid certs and any TLS version" << endl
-			<< "    -SP, --stratum-protocol <n> (deprecated) Choose which stratum protocol to use:" << endl
-			<< "        0: official stratum spec: ethpool, ethermine, coinotron, mph, nanopool (default)" << endl
-			<< "        1: eth-proxy compatible: dwarfpool, f2pool, nanopool (required for hashrate reporting to work with nanopool)" << endl
-			<< "        2: EthereumStratum/1.0.0: nicehash" << endl
+			<< "    --response-timeout <n> reconnect/failover after n seconds delay for response from (stratum) pool. Also affects connection timeout. Minimum value 2. Default 2." << endl
 			<< "    -RH, --report-hashrate Report current hashrate to pool (please only enable on pools supporting this)" << endl
-			<< "    -HWMON [<n>], Displays gpu temp, fan percent and power usage. Note: In linux, the program uses sysfs, which may require running with root privileges." << endl
+			<< "    -HWMON [0|1], Displays gpu temp, fan percent and power usage. Note: In linux, the program uses sysfs, which may require running with root privileges." << endl
 			<< "        0: Displays only temp and fan percent (default)" << endl
 			<< "        1: Also displays power usage" << endl
 			<< "    --exit Stops the miner whenever an error is encountered" << endl
 			<< "    -SE, --stratum-email <s> Email address used in eth-proxy (optional)" << endl
 			<< "    --farm-recheck <n>  Leave n ms between checks for changed work (default: 500). When using stratum, use a high value (i.e. 2000) to get more stable hashrate output" << endl
 			<< "    -P URL Specify a pool URL. Can be used multiple times. The 1st for for the primary pool, and the 2nd for the failover pool." << endl
-			<< "        URL takes the form: scheme://user[:password]@hostname:port." << endl
+			<< "        URL takes the form: scheme://user[:password]@hostname:port[/emailaddress]." << endl
 			<< "        for getwork use one of the following schemes:" << endl
 			<< "          " << URI::KnownSchemes(ProtocolFamily::GETWORK) << endl
 			<< "        for stratum use one of the following schemes: "<< endl
 			<< "          " << URI::KnownSchemes(ProtocolFamily::STRATUM) << endl
-			<< "        Example: stratum+ssl://0x012345678901234567890234567890123.miner1@ethermine.org:5555" << endl
+			<< "        Example 1 : stratum+ssl://0x012345678901234567890234567890123.miner1@ethermine.org:5555" << endl
+			<< "        Example 2 : stratum1+tcp://0x012345678901234567890234567890123.miner1@nanopool.org:9999/john.doe@gmail.com" << endl
+			<< "        Example 3 : stratum1+tcp://0x012345678901234567890234567890123@nanopool.org:9999/miner1/john.doe@gmail.com" << endl
 			<< endl
 			<< "Benchmarking mode:" << endl
 			<< "    -M [<n>],--benchmark [<n>] Benchmark for mining and exit; Optionally specify block number to benchmark against specific DAG." << endl
@@ -808,6 +669,8 @@ public:
 			<< "        1: experimental kernel" << endl
 			<< "    --cl-local-work Set the OpenCL local work size. Default is " << CLMiner::c_defaultLocalWorkSize << endl
 			<< "    --cl-global-work Set the OpenCL global work size as a multiple of the local work size. Default is " << CLMiner::c_defaultGlobalWorkSizeMultiplier << " * " << CLMiner::c_defaultLocalWorkSize << endl
+			<< "        Can be specified as negative (ie. -8192) in which case it it will be made positive," << endl
+			<< "        and it will be ajusted appropriately based on the compute power of individual AMD GPUs." << endl
 			<< "    --cl-parallel-hash <1 2 ..8> Define how many threads to associate per hash. Default=8" << endl
 #endif
 #if ETH_ETHASHCUDA
@@ -822,7 +685,7 @@ public:
 			<< "        sync  - Instruct CUDA to block the CPU thread on a synchronization primitive when waiting for the results from the device." << endl
 			<< "    --cuda-devices <0 1 ..n> Select which CUDA GPUs to mine on. Default is to use all" << endl
 			<< "    --cuda-parallel-hash <1 2 ..8> Define how many hashes to calculate in a kernel, can be scaled to achieve better performance. Default=4" << endl
-			<< "    --cuda-noeval  bypass host software re-evaluation of GPU solutions." << endl
+			<< "    --noeval  bypass host software re-evaluation of GPU solutions." << endl
 			<< "        This will trim some milliseconds off the time it takes to send a result to the pool." << endl
 			<< "        Use at your own risk! If GPU generates errored results they WILL be forwarded to the pool" << endl
 			<< "        Not recommended at high overclock." << endl
@@ -830,6 +693,7 @@ public:
 #if API_CORE
 			<< " API core configuration:" << endl
 			<< "    --api-port Set the api port, the miner should listen to. Use 0 to disable. Default=0, use negative numbers to run in readonly mode. for example -3333." << endl
+			<< "    --http-port Set the web api port, the miner should listen to. Use 0 to disable. Default=0. Data shown depends on HWMON setting." << endl
 #endif
 			;
 	}
@@ -922,7 +786,7 @@ private:
 		PoolClient *client = nullptr;
 
 		if (m_mode == OperationMode::Stratum) {
-			client = new EthStratumClient(m_worktimeout, m_email, m_report_stratum_hashrate);
+			client = new EthStratumClient(m_worktimeout, m_responsetimeout, m_email, m_report_stratum_hashrate);
 		}
 		else if (m_mode == OperationMode::Farm) {
 			client = new EthGetworkClient(m_farmRecheckPeriod);
@@ -948,19 +812,20 @@ private:
 		PoolManager mgr(client, f, m_minerType);
 		mgr.setReconnectTries(m_maxFarmRetries);
 
-		if (m_legacyParameters && !m_endpoints[k_secondary_ep_ix].User().empty()) {
-			m_endpoints[k_secondary_ep_ix].User(m_endpoints[k_primary_ep_ix].User());
-			m_endpoints[k_secondary_ep_ix].Pass(m_endpoints[k_primary_ep_ix].Pass());
+		// If we are in simulation mode we add a fake connection
+		if (m_mode == OperationMode::Simulation) {
+			URI con(URI("http://-:0"));
+			mgr.clearConnections();
+			mgr.addConnection(con);
 		}
-		for (unsigned i = 0; i < k_max_endpoints; i++)
-		{
-			if (m_endpoints[i].Host().empty())
-				break;
-			mgr.addConnection(m_endpoints[i]);
+		else {
+			for (auto conn : m_endpoints)
+                mgr.addConnection(conn);
 		}
 
 #if API_CORE
 		Api api(this->m_api_port, f);
+        http_server.run(m_http_port, &f, m_show_hwmonitors, m_show_power);
 #endif
 
 		// Start PoolManager
@@ -1000,7 +865,7 @@ private:
 	unsigned m_openclDeviceCount = 0;
 	vector<unsigned> m_openclDevices = vector<unsigned>(MAX_MINERS, -1);
 	unsigned m_openclThreadsPerHash = 8;
-	unsigned m_globalWorkSizeMultiplier = CLMiner::c_defaultGlobalWorkSizeMultiplier;
+	int m_globalWorkSizeMultiplier = CLMiner::c_defaultGlobalWorkSizeMultiplier;
 	unsigned m_localWorkSize = CLMiner::c_defaultLocalWorkSize;
 #endif
 #if ETH_ETHASHCUDA
@@ -1010,9 +875,9 @@ private:
 	unsigned m_cudaSchedule = 4; // sync
 	unsigned m_cudaGridSize = CUDAMiner::c_defaultGridSize;
 	unsigned m_cudaBlockSize = CUDAMiner::c_defaultBlockSize;
-	bool m_cudaNoEval = false;
 	unsigned m_parallelHash    = 4;
 #endif
+	bool m_noEval = false;
 	unsigned m_dagLoadMode = 0; // parallel
 	unsigned m_dagCreateDevice = 0;
 	bool m_exit = false;
@@ -1022,27 +887,27 @@ private:
 	unsigned m_benchmarkTrials = 5;
 	unsigned m_benchmarkBlock = 0;
 
-	vector<PoolConnection> m_endpoints;
-	const unsigned k_max_endpoints = 6;
-	const unsigned k_primary_ep_ix = 0;
-	const unsigned k_secondary_ep_ix = 1;
-	unsigned m_ep_ix = 0;
+	vector<URI> m_endpoints;
 
 	unsigned m_maxFarmRetries = 3;
 	unsigned m_farmRecheckPeriod = 500;
 	unsigned m_displayInterval = 5;
 	bool m_farmRecheckSet = false;
+	
+	// Number of seconds to wait before triggering a no work timeout from pool
 	int m_worktimeout = 180;
+	// Number of seconds to wait before triggering a response timeout from pool
+	int m_responsetimeout = 2;
+
 	bool m_show_hwmonitors = false;
 	bool m_show_power = false;
 #if API_CORE
 	int m_api_port = 0;
+	int m_http_port = 0;
 #endif
 
 	bool m_report_stratum_hashrate = false;
 	string m_email;
-	bool m_legacyParameters = false;
-	bool m_newParameters = false;
 
 #if ETH_DBUS
 	DBusInt dbusint;
